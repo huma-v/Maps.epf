@@ -1,0 +1,172 @@
+﻿var _map;
+var markers;
+var route = [];
+var _lastClickLatLng;
+
+
+// IE11 polyfill of Object.assign
+// credit goes to MS Copilot/MDN
+if (typeof Object.assign !== 'function') {
+  Object.defineProperty(Object, 'assign', {
+    value: function(target) {
+      'use strict';
+      // Step 1: Validate the target is not null or undefined.
+      if (target == null) { // Covers both null and undefined.
+        throw new TypeError('Cannot convert undefined or null to object');
+      }
+      
+      var to = Object(target);
+
+      // Step 2: Iterate over the source objects.
+      for (var index = 1; index < arguments.length; index++) {
+        var nextSource = arguments[index];
+        // Skip if the source is null or undefined.
+        if (nextSource != null) {
+          // Coerce the source to an object (this will box primitives like strings)
+          var from = Object(nextSource);
+          
+          // Step 3: Copy all own enumerable properties.
+          for (var key in from) {
+            if (Object.prototype.hasOwnProperty.call(from, key)) {
+              to[key] = from[key];
+            }
+          }
+        }
+      }
+      return to;
+    },
+    writable: true,
+    configurable: true
+  });
+}
+
+
+function map() {
+	if (!_map) {
+		var mapdiv = document.getElementById("map");
+		if (!mapdiv) {
+			mapdiv = document.body.appendChild(document.createElement("div"));
+			mapdiv.id = "map";
+		}
+
+		_map = L.map('map', { doubleClickZoom: false });
+		L.tileLayer('http://{s}.tile.osm.org/{z}/{x}/{y}.png', {
+			maxZoom: 18,
+			attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+			noWrap: true
+		}).addTo(_map);
+
+		_map.on("contextmenu", function (ev) { _lastClickLatLng = ev.latlng; });
+	}
+
+	return _map;
+}
+
+
+// utility function to work around browser compatibility
+// credit goes to Microsoft Copilot
+function copyTextToClipboard(text) {
+	// Create a temporary hidden textarea,
+	// insert the text, select it, and execute the copy command.
+	if (document.queryCommandSupported && document.queryCommandSupported("copy")) {
+		const textarea = document.createElement("textarea");
+		textarea.textContent = text;
+		// Prevent scrolling to bottom of page in some browsers.
+		textarea.style.position = "fixed";
+		document.body.appendChild(textarea);
+		textarea.select();
+		try {
+			const successful = document.execCommand("copy");
+			return successful;
+		} catch (ex) {
+			console.error("Copying text command failed", ex);
+			return false;
+		} finally {
+			document.body.removeChild(textarea);
+		}
+	}
+	
+	return false;
+}
+
+
+function initMap(params) {
+	map().setView([params.lat, params.lng], params.zoom);
+}
+
+
+function getViewportCoords() {
+	var center = map().getCenter();
+	return { "lat": center.lat, "lng": center.lng, "zoom": map().getZoom() };
+}
+
+
+function copyGoogleMapsLink() {
+	var coords = getViewportCoords();
+	copyTextToClipboard("https://www.google.com/maps/@?api=1&map_action=map&center=" + coords.lat + "," + coords.lng + "&zoom=" + coords.zoom);
+}
+
+
+function setMarkers(newMarkers, selectedIds, panToSelected) {
+	if (markers) {
+		markers.remove();
+		markers = undefined;
+	}
+
+	var _markers = L.markerClusterGroup();
+
+	newMarkers.forEach(function (e, i) {
+		var selected = (selectedIds.indexOf(i) !== -1);
+		var iconOpts = Object.assign({}, L.Icon.Default.prototype.options, { className: selected ? "divIconRed" : "divIconBlue" });
+		if (e.number) iconOpts.html = e.number;
+		var opts = { title: e.name, riseOnHover: true };
+		opts.icon = L.divIcon(iconOpts);
+		if (selected) opts.zIndexOffset = 1000;
+		_markers.addLayer(L.marker(e, opts));
+	});
+	
+	if (panToSelected) {
+		if (selectedIds.length) {
+			var pts = selectedIds.map(function (e) { return newMarkers[e]; });
+			var bounds = L.latLngBounds(pts);
+			if (!map().getBounds().contains(bounds)) {
+				map().fitBounds(bounds, { maxZoom: map().getZoom() });
+			}
+		}
+	}
+
+	map().addLayer(_markers);
+	markers = _markers;
+}
+
+
+function setRoute(segments) {
+	while (route.length) {
+		route.shift().remove();
+	}
+	segments.forEach(function (e, i) {
+		var line = L.polyline(e.waypoints, Object.assign({ weight: 3, offset: 5 }, e.broken && { color: "#ff3335", dashArray: "4" }));
+		line.arrowheads({size: '20px', frequency: '100px'});
+		route.push(line.addTo(map()));
+	});
+}
+
+
+function getViewport() {
+	var bounds = map().getBounds();
+	var center = map().getCenter();
+	return { n: bounds.getNorth(), e: bounds.getEast(), s: bounds.getSouth(), w: bounds.getWest(), lat: center.lat, lng: center.lng };
+}
+
+
+return {
+	initMap: initMap,
+	getViewportCoords: getViewportCoords,
+	lastClickLatLng: function () { return _lastClickLatLng; },
+	copyGoogleMapsLink: copyGoogleMapsLink,
+	setMarkers: function(params) {
+		setMarkers(params.newMarkers, params.selectedIds, params.panToSelected);
+	},
+	setRoute: setRoute,
+	getViewport: getViewport
+};

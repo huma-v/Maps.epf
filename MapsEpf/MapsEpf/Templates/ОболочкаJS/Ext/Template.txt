@@ -1,0 +1,214 @@
+﻿<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="ru">
+	<head>
+		<title>Модуль JS</title>
+		<!--
+			This file is a sort of middleware between 1C and JavaScript code
+			It provides such facilities as callback support, console.log, error handing
+		-->
+		<meta charset="utf-8" />
+		<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+		
+		<script>/*<!--*/
+			// Polyfills (thanks, copilot!)
+			
+			if (!Object.entries) {
+			  Object.entries = function(obj) {
+			    var ownProps = Object.keys(obj);
+			    var result = [];
+			    
+			    for (var i = 0; i < ownProps.length; i++) {
+			      result.push([ownProps[i], obj[ownProps[i]]]);
+			    }
+			    
+			    return result;
+			  };
+			}
+			
+			if (!Object.fromEntries) {
+			  Object.fromEntries = function(entries) {
+			    var obj = {};
+			    
+			    for (var i = 0; i < entries.length; i++) {
+			      var pair = entries[i];
+			      
+			      // Ensure each entry is an array with at least two elements
+			      if (Array.isArray(pair) && pair.length >= 2) {
+			        obj[pair[0]] = pair[1];
+			      }
+			    }
+			    
+			    return obj;
+			  };
+			}
+		/*-->*/</script>
+		<style>/*<!--*/
+			/* http://meyerweb.com/eric/tools/css/reset/ 
+			   v2.0 | 20110126
+			   License: none (public domain)
+			*/
+
+			html, body, div, span, applet, object, iframe,
+			h1, h2, h3, h4, h5, h6, p, blockquote, pre,
+			a, abbr, acronym, address, big, cite, code,
+			del, dfn, em, img, ins, kbd, q, s, samp,
+			small, strike, strong, sub, sup, tt, var,
+			b, u, i, center,
+			dl, dt, dd, ol, ul, li,
+			fieldset, form, label, legend,
+			table, caption, tbody, tfoot, thead, tr, th, td,
+			article, aside, canvas, details, embed, 
+			figure, figcaption, footer, header, hgroup, 
+			menu, nav, output, ruby, section, summary,
+			time, mark, audio, video {
+				margin: 0;
+				padding: 0;
+				border: 0;
+				font-size: 100%;
+				font: inherit;
+				vertical-align: baseline;
+			}
+			/* HTML5 display-role reset for older browsers */
+			article, aside, details, figcaption, figure, 
+			footer, header, hgroup, menu, nav, section {
+				display: block;
+			}
+			body {
+				line-height: 1;
+			}
+			ol, ul {
+				list-style: none;
+			}
+			blockquote, q {
+				quotes: none;
+			}
+			blockquote:before, blockquote:after,
+			q:before, q:after {
+				content: '';
+				content: none;
+			}
+			table {
+				border-collapse: collapse;
+				border-spacing: 0;
+			}
+		/*-->*/</style>
+		
+		<!-- global libraries go here -->
+		<script src="leaflet/leaflet.js"></script>
+		<link rel="stylesheet" href="leaflet/leaflet.css" />
+		
+		<link rel="stylesheet" href="Leaflet.markercluster/MarkerCluster.css" />
+		<link rel="stylesheet" href="Leaflet.markercluster/MarkerCluster.Default.css" />
+		<script src="Leaflet.markercluster/leaflet.markercluster.js"></script>
+		
+		<script src="Leaflet.GeometryUtil/leaflet.geometryutil.js"></script>
+		
+		<script src="leaflet-arrowheads/leaflet-arrowheads.js"></script>
+		
+		<script src="Leaflet.PolylineOffset/leaflet.polylineoffset.js"></script>
+		
+		<style>/*<!--*/
+			${{CUSTOMSTYLE}}
+		/*-->*/</style>
+		<script>/*<!--*/
+			"use strict";
+			
+			window.addEventListener("load", function() {
+				// Callback support is by pushing a message object into pendingCallbackData array and clicking the callbackButton,
+				// when the button is clicked, 1C catches the event and processes whatever message objects are enqueued
+				var callbackButton = document.getElementById("callbackButton");
+				
+				// [ { type: ("RESULT" | "ERROR"), callbackId: string, payload: <json string> } ]
+				var pendingCallbackData = []; // special value signaling successful load
+				
+				// Puts a message object in queue
+				function enqueue(type, callbackId, payload) {
+					if (callbackId) {
+						pendingCallbackData.push({ type: type, callbackId: callbackId, payload: JSON.stringify(payload !== undefined ? payload : null) });
+						window.c1module.hasPendingCallbackData = true;
+						callbackButton.click();
+
+						// in case the event somehow got lost, keep clicking until the queue is empty
+						var clicker = setInterval(function() {
+							if (window.c1module.hasPendingCallbackData)
+								callbackButton.click();
+							else
+								clearInterval(clicker);
+						}, 10);
+					}
+				}
+				
+				// Removes last message object from the queue
+				function unqueue() {
+					pendingCallbackData.shift();
+					window.c1module.hasPendingCallbackData = (pendingCallbackData.length > 0);
+				}
+				
+				window.c1module = {
+					pendingCallbackData: pendingCallbackData,
+					hasPendingCallbackData: false,
+					
+					// 1C-side entrypoint to call user functions
+					// it handles parameter/result serialization, sets up async callbacks, handles errors
+					// returns sync result
+					call: function(funcName, paramsStr, callbackId) {
+						// Passing complex objects across 1C/JS boundary is a pain, so we use JSON
+						var params = JSON.parse(paramsStr);
+						
+						try {
+							var resultCallback = function(result) { enqueue("RESULT", callbackId, result); };
+							var errorCallback = function(error) { enqueue("ERROR", callbackId, error); };
+							var payload = this.user[funcName](params, resultCallback, errorCallback);
+							return { type: "RESULT", payload: JSON.stringify(payload !== undefined ? payload : null) };
+						} catch (e) {
+							var expl = e.stack && e.stack.toString();
+							return { type: "ERROR", payload: e.toString() + "\n\n" + expl }; //e.toString() };
+						}
+					},
+					
+					enqueue: enqueue,
+					unqueue: unqueue,
+				};
+				
+				// Pushes a message to display text on 1C messages window
+				console.log = function(message) {
+					if (typeof message === "object") {
+						var obj = Array.isArray(message) ? [] : {};
+						for (var k in message) {
+							var v = message[k];
+							obj[k] = (typeof v === "object") ? String(v) : v;
+						}
+						message = (!Array.isArray(message) ? ((message === null ? "null" : message.toString()) + " // ") : "") + JSON.stringify(obj);
+					} else {
+						message = String(message);
+					}
+					enqueue("RESULT", "+LOG", message);
+				}
+				
+				//console.info = console.log;
+				//console.warn = console.log;
+				console.error = console.log;
+				//console.debug = console.log;
+				
+				// Wraps top level unhandled async errors 
+				window.addEventListener("error", function(ev) {
+					var expl = ev.error.stack && ev.error.stack.toString();
+					enqueue("RESULT", "+ERROR", ev.error.toString() + "\n\n" + expl);
+					return true;
+				});
+				
+				window.c1module.user =
+					(function() {
+						// Custom code {
+						${{CUSTOMCODE}}
+						// } Custom code
+						})();
+				
+				// First message is a signal that the "middleware" has successfully loaded
+				enqueue(undefined, "READY");
+			});
+		/*-->*/</script>
+	</head>
+	<body><button id="callbackButton" style="display:none"></button></body>
+</html>
